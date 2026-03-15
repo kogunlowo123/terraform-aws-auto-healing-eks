@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture -- terraform-aws-auto-healing-eks</title>
+<style>
+  :root{--ink:#0b0c0b;--accent:#c8420a;--surface:#131413;--border:#2a2b2a;--text:#d4d4d4;--text-dim:#888;--card:#181918;--success:#2ea043;--warn:#d29922;--info:#388bfd}
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"SF Mono","Cascadia Code","Fira Code",monospace;background:var(--ink);color:var(--text);line-height:1.65;padding:0}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+  .container{max-width:1140px;margin:0 auto;padding:2rem 1.5rem}
+  header{border-bottom:2px solid var(--accent);padding:2.5rem 0 1.5rem;margin-bottom:2.5rem}
+  header h1{font-size:1.6rem;color:#fff;margin-bottom:.35rem}
+  header p.subtitle{color:var(--text-dim);font-size:.85rem}
+  .badge{display:inline-block;font-size:.7rem;padding:.15rem .55rem;border-radius:3px;margin-right:.4rem;margin-bottom:.3rem;border:1px solid var(--border);color:var(--text-dim)}
+  .badge--accent{border-color:var(--accent);color:var(--accent)}
+  h2{font-size:1.15rem;color:var(--accent);margin:2.5rem 0 1rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+  h3{font-size:.95rem;color:#fff;margin:1.5rem 0 .6rem}
+  p,li{font-size:.82rem}
+  ul,ol{padding-left:1.4rem;margin-bottom:1rem}li{margin-bottom:.3rem}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1rem;margin-bottom:1.5rem}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:1rem}
+  .card h4{font-size:.8rem;color:var(--accent);margin-bottom:.4rem}
+  .card p{font-size:.75rem;color:var(--text-dim)}
+  .card .val{font-size:1.3rem;color:#fff;font-weight:700;margin:.3rem 0}
+  .arch-diagram{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:1.5rem;overflow-x:auto;margin:1rem 0 1.5rem}
+  .flow-row{display:flex;align-items:center;gap:.5rem;justify-content:center;margin-bottom:.5rem;flex-wrap:wrap}
+  .box{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:.55rem .9rem;font-size:.72rem;text-align:center;min-width:90px;color:var(--text)}
+  .box.accent{border-color:var(--accent);color:var(--accent)}
+  .arrow{color:var(--accent);font-size:.9rem;flex-shrink:0}
+  table{width:100%;border-collapse:collapse;font-size:.75rem;margin:1rem 0}
+  th,td{border:1px solid var(--border);padding:.45rem .6rem;text-align:left}
+  th{background:var(--surface);color:var(--accent);font-weight:600}
+  tr:nth-child(even){background:var(--surface)}
+  .checklist{list-style:none;padding-left:0}
+  .checklist li{padding:.35rem 0;font-size:.78rem;border-bottom:1px solid var(--border)}
+  .checklist li::before{content:"[ ] ";color:var(--accent);font-weight:700}
+  .section-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+  @media(max-width:700px){.section-grid{grid-template-columns:1fr}}
+  .code-block{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1rem;font-size:.73rem;overflow-x:auto;margin:.8rem 0;white-space:pre}
+  footer{border-top:1px solid var(--border);margin-top:3rem;padding:1.5rem 0;text-align:center;font-size:.7rem;color:var(--text-dim)}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>terraform-aws-auto-healing-eks</h1>
+  <p class="subtitle">Architecture Reference -- Self-Healing EKS Cluster with Automated Node Remediation</p>
+  <div style="margin-top:.7rem">
+    <span class="badge badge--accent">Terraform</span>
+    <span class="badge badge--accent">AWS</span>
+    <span class="badge">EKS</span>
+    <span class="badge">Karpenter</span>
+    <span class="badge">Cluster Autoscaler</span>
+    <span class="badge">Lambda</span>
+    <span class="badge">EventBridge</span>
+    <span class="badge">Helm</span>
+  </div>
+</header>
+
+<!-- ─── Executive Summary ─── -->
+<h2>Executive Summary</h2>
+<p>This module deploys a production-ready Amazon EKS cluster with comprehensive self-healing capabilities. It provisions managed node groups with launch templates, installs Karpenter for intelligent node auto-provisioning, deploys the Cluster Autoscaler for ASG-based scaling, and sets up an automated node remediation pipeline using EventBridge, Lambda, and CloudWatch Alarms. The Node Termination Handler ensures graceful pod drainage during spot interruptions and scheduled maintenance events. All components integrate with OIDC-based IRSA for secure, least-privilege access.</p>
+
+<!-- ─── Overview Cards ─── -->
+<h2>Overview</h2>
+<div class="cards">
+  <div class="card"><h4>AWS Resources</h4><div class="val">25+</div><p>EKS Cluster, Node Groups, Launch Templates, Security Groups, OIDC, Helm Releases, Lambda, EventBridge, SQS, CloudWatch, SNS, IAM Roles</p></div>
+  <div class="card"><h4>Required Variables</h4><div class="val">3</div><p>cluster_name, vpc_id, subnet_ids</p></div>
+  <div class="card"><h4>Outputs</h4><div class="val">8</div><p>Cluster ID/ARN/endpoint, node groups, Karpenter role, Lambda ARN, OIDC provider</p></div>
+  <div class="card"><h4>Providers</h4><div class="val">4</div><p>AWS >= 5.40.0, Kubernetes, Helm >= 2.12.0, TLS</p></div>
+</div>
+
+<!-- ─── Architecture Diagram ─── -->
+<h2>Architecture Diagram</h2>
+<div class="arch-diagram">
+  <div class="flow-row">
+    <div class="box accent">EKS Control Plane</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">API Server</div>
+    <div class="arrow">&amp;</div>
+    <div class="box">OIDC Provider</div>
+  </div>
+  <div class="flow-row">
+    <div class="box">API Server</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">CoreDNS</div>
+    <div class="arrow">&amp;</div>
+    <div class="box">kube-proxy</div>
+    <div class="arrow">&amp;</div>
+    <div class="box">VPC CNI</div>
+    <div class="arrow">&amp;</div>
+    <div class="box">EBS CSI</div>
+  </div>
+  <div class="flow-row">
+    <div class="box accent">Managed Node Groups</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">Launch Templates</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">Auto Scaling Groups</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">EC2 Instances</div>
+  </div>
+  <div class="flow-row">
+    <div class="box accent">Karpenter (IRSA)</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">EC2 Fleet / Instances</div>
+    <div class="arrow">&#8592;</div>
+    <div class="box">SQS Interruption Queue</div>
+    <div class="arrow">&#8592;</div>
+    <div class="box">EventBridge (Spot/Health)</div>
+  </div>
+  <div class="flow-row">
+    <div class="box accent">Remediation Lambda</div>
+    <div class="arrow">&#8592;</div>
+    <div class="box">EventBridge (EC2 State/Health)</div>
+  </div>
+  <div class="flow-row">
+    <div class="box accent">Remediation Lambda</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">ASG (Terminate/Replace)</div>
+    <div class="arrow">&amp;</div>
+    <div class="box">SNS Notifications</div>
+  </div>
+  <div class="flow-row">
+    <div class="box">CloudWatch Alarms</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">SNS (Node Health)</div>
+  </div>
+  <div class="flow-row">
+    <div class="box">Metrics Server</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box accent">API Server (HPA/VPA)</div>
+  </div>
+</div>
+
+<!-- ─── Component Breakdown ─── -->
+<h2>Component Breakdown</h2>
+<div class="section-grid">
+  <div>
+    <h3>EKS Control Plane</h3>
+    <ul>
+      <li><strong>EKS Cluster</strong> -- Kubernetes 1.27+ with full audit logging (api, audit, authenticator, controllerManager, scheduler)</li>
+      <li><strong>OIDC Provider</strong> -- Enables IAM Roles for Service Accounts (IRSA)</li>
+      <li><strong>Security Groups</strong> -- Separate cluster and node SGs with minimal rules</li>
+    </ul>
+    <h3>EKS Addons</h3>
+    <ul>
+      <li><strong>CoreDNS</strong> -- Cluster DNS resolution</li>
+      <li><strong>kube-proxy</strong> -- Network proxy on each node</li>
+      <li><strong>VPC CNI</strong> -- Pod networking with VPC IPs</li>
+      <li><strong>EBS CSI Driver</strong> -- Persistent volume support</li>
+    </ul>
+    <h3>Managed Node Groups</h3>
+    <ul>
+      <li>Configurable instance types, scaling (min/max/desired), capacity type (ON_DEMAND/SPOT)</li>
+      <li>Launch templates with gp3 encrypted EBS, IMDSv2 required, detailed monitoring</li>
+      <li>Labels and taints for workload scheduling</li>
+    </ul>
+  </div>
+  <div>
+    <h3>Auto-Scaling Layer</h3>
+    <ul>
+      <li><strong>Karpenter v0.34.0</strong> -- Intelligent node provisioning with IRSA, SQS interruption queue, EventBridge rules for spot/health events</li>
+      <li><strong>Cluster Autoscaler v9.35.0</strong> -- ASG-based scaling with auto-discovery</li>
+      <li><strong>Node Termination Handler v0.21.0</strong> -- Graceful spot interruption draining, scheduled event draining, rebalance monitoring</li>
+      <li><strong>Metrics Server v3.12.0</strong> -- Resource metrics for HPA/VPA</li>
+    </ul>
+    <h3>Self-Healing Layer</h3>
+    <ul>
+      <li><strong>Remediation Lambda</strong> -- Python 3.12 function triggered by EventBridge on EC2 state changes and health events</li>
+      <li><strong>CloudWatch Alarms</strong> -- StatusCheckFailed alarms per node group</li>
+      <li><strong>SNS Topic</strong> -- Node health alert notifications</li>
+      <li><strong>Auto-Scaling Policies</strong> -- Scale-out (+2) and scale-in (-1) with 300s cooldown</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ─── Data Flow ─── -->
+<h2>Data Flow</h2>
+<ol>
+  <li>EKS cluster provisions with control plane logging to CloudWatch</li>
+  <li>Managed node groups launch EC2 instances via launch templates into the VPC subnets</li>
+  <li>EKS addons (CoreDNS, kube-proxy, VPC CNI, EBS CSI) install on cluster</li>
+  <li>Karpenter watches for unschedulable pods and provisions optimal nodes via EC2 Fleet API</li>
+  <li>SQS queue receives EC2 interruption/health events from EventBridge for Karpenter to handle gracefully</li>
+  <li>Node Termination Handler detects spot interruptions and cordons/drains affected nodes</li>
+  <li>CloudWatch alarms monitor EC2 StatusCheckFailed metrics and alert via SNS</li>
+  <li>EventBridge captures EC2 state-change and health events, triggers remediation Lambda</li>
+  <li>Lambda inspects the instance, terminates unhealthy nodes from ASG, and publishes to SNS</li>
+  <li>ASG replaces terminated instances automatically, maintaining desired capacity</li>
+</ol>
+
+<!-- ─── Security Controls ─── -->
+<h2>Security Controls</h2>
+<table>
+  <tr><th>Control</th><th>Implementation</th></tr>
+  <tr><td>Network Isolation</td><td>Separate cluster and node security groups; private API endpoint enabled</td></tr>
+  <tr><td>IMDSv2 Enforced</td><td>Launch template requires hop limit 2, tokens required</td></tr>
+  <tr><td>EBS Encryption</td><td>All node volumes encrypted at rest by default</td></tr>
+  <tr><td>IRSA (OIDC)</td><td>Karpenter and Cluster Autoscaler use OIDC-federated IAM roles</td></tr>
+  <tr><td>Least Privilege</td><td>Separate IAM roles for cluster, nodes, Karpenter, autoscaler, Lambda</td></tr>
+  <tr><td>SSM Access</td><td>Nodes have SSM Managed Instance Core for secure shell access</td></tr>
+  <tr><td>Audit Logging</td><td>Full EKS control plane logging (api, audit, authenticator, controllerManager, scheduler)</td></tr>
+  <tr><td>Lambda Scoping</td><td>Remediation Lambda scoped to cluster-tagged instances only</td></tr>
+</table>
+
+<!-- ─── Industry Adaptation ─── -->
+<h2>Industry Adaptation</h2>
+<div class="section-grid">
+  <div>
+    <h3>Production Workloads</h3>
+    <p>Use ON_DEMAND node groups for critical workloads with Karpenter for elastic compute. Enable auto_remediation for automatic recovery from node failures. Set min_size >= 2 for HA.</p>
+  </div>
+  <div>
+    <h3>Cost-Optimized / Batch</h3>
+    <p>Use SPOT capacity_type for fault-tolerant workloads. Enable Node Termination Handler for graceful spot handling. Use Karpenter for intelligent instance type selection.</p>
+  </div>
+  <div>
+    <h3>Multi-Tenant Platforms</h3>
+    <p>Define multiple node groups with labels and taints for tenant isolation. Use separate node groups for system workloads vs tenant workloads.</p>
+  </div>
+  <div>
+    <h3>Regulated Industries</h3>
+    <p>Enable full audit logging. Enforce IMDSv2. Use encrypted EBS volumes. Restrict public API access. Add network policies via Calico or Cilium post-deploy.</p>
+  </div>
+</div>
+
+<!-- ─── Production Readiness Checklist ─── -->
+<h2>Production Readiness Checklist</h2>
+<ul class="checklist">
+  <li>Verify VPC has subnets in at least 2 AZs with proper tagging</li>
+  <li>Configure kubectl: <code>aws eks update-kubeconfig --name &lt;cluster&gt;</code></li>
+  <li>Verify Karpenter pods running: <code>kubectl get pods -n karpenter</code></li>
+  <li>Confirm metrics-server provides node metrics: <code>kubectl top nodes</code></li>
+  <li>Test Node Termination Handler: <code>kubectl get ds -n kube-system</code></li>
+  <li>Validate remediation Lambda in CloudWatch Logs</li>
+  <li>Subscribe alerting endpoints to the SNS node health topic</li>
+  <li>Set up Pod Disruption Budgets for critical workloads</li>
+  <li>Configure Karpenter NodePool and EC2NodeClass resources</li>
+  <li>Enable container insights for workload-level monitoring</li>
+  <li>Set up remote Terraform state backend (S3 + DynamoDB)</li>
+  <li>Tag all resources with Environment, Team, ManagedBy</li>
+</ul>
+
+<!-- ─── Config Reference ─── -->
+<h2>Configuration Reference</h2>
+<h3>Inputs</h3>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Default</th><th>Required</th><th>Description</th></tr>
+  <tr><td>cluster_name</td><td>string</td><td>--</td><td>yes</td><td>Name of the EKS cluster</td></tr>
+  <tr><td>cluster_version</td><td>string</td><td>1.29</td><td>no</td><td>Kubernetes version (1.27+)</td></tr>
+  <tr><td>vpc_id</td><td>string</td><td>--</td><td>yes</td><td>VPC ID for the cluster</td></tr>
+  <tr><td>subnet_ids</td><td>list(string)</td><td>--</td><td>yes</td><td>Subnet IDs (min 2 AZs)</td></tr>
+  <tr><td>node_groups</td><td>list(object)</td><td>[default: m5.large, 2-10]</td><td>no</td><td>Node group configurations</td></tr>
+  <tr><td>enable_karpenter</td><td>bool</td><td>true</td><td>no</td><td>Enable Karpenter auto-provisioning</td></tr>
+  <tr><td>enable_cluster_autoscaler</td><td>bool</td><td>false</td><td>no</td><td>Enable Cluster Autoscaler</td></tr>
+  <tr><td>enable_node_termination_handler</td><td>bool</td><td>true</td><td>no</td><td>Enable AWS Node Termination Handler</td></tr>
+  <tr><td>enable_auto_remediation</td><td>bool</td><td>true</td><td>no</td><td>Enable Lambda-based node remediation</td></tr>
+  <tr><td>remediation_lambda_timeout</td><td>number</td><td>300</td><td>no</td><td>Lambda timeout (30-900 seconds)</td></tr>
+  <tr><td>alarm_evaluation_periods</td><td>number</td><td>3</td><td>no</td><td>CloudWatch alarm evaluation periods (1-10)</td></tr>
+  <tr><td>alarm_threshold</td><td>number</td><td>1</td><td>no</td><td>StatusCheckFailed alarm threshold</td></tr>
+  <tr><td>tags</td><td>map(string)</td><td>{}</td><td>no</td><td>Tags for all resources</td></tr>
+</table>
+
+<h3>Outputs</h3>
+<table>
+  <tr><th>Name</th><th>Description</th></tr>
+  <tr><td>cluster_id</td><td>The ID of the EKS cluster</td></tr>
+  <tr><td>cluster_arn</td><td>The ARN of the EKS cluster</td></tr>
+  <tr><td>cluster_endpoint</td><td>The endpoint URL for the EKS API server</td></tr>
+  <tr><td>cluster_certificate_authority</td><td>Base64 certificate data (sensitive)</td></tr>
+  <tr><td>node_group_ids</td><td>Map of node group names to IDs</td></tr>
+  <tr><td>karpenter_role_arn</td><td>ARN of the Karpenter IAM role</td></tr>
+  <tr><td>remediation_lambda_arn</td><td>ARN of the remediation Lambda</td></tr>
+  <tr><td>oidc_provider_arn</td><td>ARN of the OIDC provider</td></tr>
+</table>
+
+<!-- ─── Deployment ─── -->
+<h2>Deployment</h2>
+<div class="code-block">terraform init
+terraform plan -out=tfplan
+terraform apply tfplan
+
+# Configure kubectl
+aws eks update-kubeconfig --name &lt;cluster_name&gt; --region &lt;region&gt;
+
+# Verify nodes
+kubectl get nodes
+
+# Verify Karpenter
+kubectl get pods -n karpenter
+
+# Verify metrics
+kubectl top nodes
+
+# Verify Node Termination Handler
+kubectl get ds -n kube-system aws-node-termination-handler</div>
+
+<!-- ─── Links ─── -->
+<h2>Links</h2>
+<ul>
+  <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html">Amazon EKS User Guide</a></li>
+  <li><a href="https://karpenter.sh/docs/getting-started/">Karpenter Documentation</a></li>
+  <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/node-health.html">EKS Node Health</a></li>
+  <li><a href="https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster">Terraform aws_eks_cluster</a></li>
+  <li><a href="https://aws.github.io/aws-eks-best-practices/">EKS Best Practices Guide</a></li>
+  <li><a href="https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/aws/README.md">Cluster Autoscaler on AWS</a></li>
+</ul>
+
+<footer>
+  terraform-aws-auto-healing-eks &middot; Architecture Reference &middot; Generated 2026-03-15 &middot; MIT License
+</footer>
+
+</div>
+</body>
+</html>
